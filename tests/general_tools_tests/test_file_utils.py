@@ -6,46 +6,30 @@ import tempfile
 import unittest
 import zipfile
 
-from general_tools import file_utils
+from libraries.general_tools import file_utils
 
 
 class FileUtilsTests(unittest.TestCase):
 
     def setUp(self):
-        """
-        Runs before each test
-        """
+        """Runs before each test."""
         self.tmp_dir = ""
         self.tmp_dir1 = ""
         self.tmp_dir2 = ""
-        self.tmp_file = ""
-        self.tmp_file1 = ""
-        self.tmp_file2 = ""
-        self.tmp_file3 = ""
 
     def tearDown(self):
         """
-        Runs after each test
+        Runs after each test.
+
+        Delete temp dirs
         """
-        # delete temp files
-        if os.path.isdir(self.tmp_dir):
-            shutil.rmtree(self.tmp_dir, ignore_errors=True)
-        if os.path.isdir(self.tmp_dir1):
-            shutil.rmtree(self.tmp_dir1, ignore_errors=True)
-        if os.path.isdir(self.tmp_dir2):
-            shutil.rmtree(self.tmp_dir2, ignore_errors=True)
-        if os.path.isfile(self.tmp_file):
-            os.remove(self.tmp_file)
-        if os.path.isfile(self.tmp_file1):
-            os.remove(self.tmp_file1)
-        if os.path.isfile(self.tmp_file2):
-            os.remove(self.tmp_file2)
-        if os.path.isfile(self.tmp_file3):
-            os.remove(self.tmp_file3)
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        shutil.rmtree(self.tmp_dir1, ignore_errors=True)
+        shutil.rmtree(self.tmp_dir2, ignore_errors=True)
 
     def test_unzip(self):
         self.tmp_dir = tempfile.mkdtemp()
-        zip_file = self.tmp_dir + "/foo.zip"
+        zip_file = os.path.join(self.tmp_dir, 'foo.zip')
 
         _, self.tmp_file = tempfile.mkstemp()
         with open(self.tmp_file, "w") as tmpf:
@@ -60,10 +44,10 @@ class FileUtilsTests(unittest.TestCase):
 
     def test_add_contents_to_zip(self):
         self.tmp_dir1 = tempfile.mkdtemp()
-        zip_file = self.tmp_dir1 + "/foo.zip"
+        zip_file = os.path.join(self.tmp_dir1, 'foo.zip')
 
         self.tmp_dir2 = tempfile.mkdtemp()
-        tmp_file = self.tmp_dir2 + "/foo.txt"
+        tmp_file = os.path.join(self.tmp_dir2, 'foo.txt')
         with open(tmp_file, "w") as tmpf:
             tmpf.write("hello world")
 
@@ -77,7 +61,7 @@ class FileUtilsTests(unittest.TestCase):
 
     def test_add_file_to_zip(self):
         self.tmp_dir1 = tempfile.mkdtemp()
-        zip_file = self.tmp_dir1 + "/foo.zip"
+        zip_file = os.path.join(self.tmp_dir1, 'foo.zip')
 
         _, self.tmp_file = tempfile.mkstemp()
         with open(self.tmp_file, "w") as tmpf:
@@ -93,7 +77,7 @@ class FileUtilsTests(unittest.TestCase):
 
     def test_make_dir(self):
         self.tmp_dir = tempfile.mkdtemp()
-        sub_dir = self.tmp_dir + "/subdirectory"
+        sub_dir = os.path.join(self.tmp_dir, 'subdirectory')
         file_utils.make_dir(sub_dir)
         self.assertTrue(os.path.isdir(sub_dir))
 
@@ -135,7 +119,7 @@ class FileUtilsTests(unittest.TestCase):
 
     def test_get_mime_type(self):
         self.tmp_dir = tempfile.mkdtemp()
-        tmp_file = self.tmp_dir + "/hello.txt"
+        tmp_file = os.path.join(self.tmp_dir, 'hello.txt')
         with open(tmp_file, "w") as f:
             f.write("hello world")
         self.assertEqual(file_utils.get_mime_type(tmp_file), "text/plain")
@@ -144,9 +128,9 @@ class FileUtilsTests(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         _, tmp_file1 = tempfile.mkstemp(dir=self.tmp_dir)
         _, tmp_file2 = tempfile.mkstemp(dir=self.tmp_dir)
-        tmp_subdir = self.tmp_dir + "/subdir"
+        tmp_subdir = os.path.join(self.tmp_dir, 'subdir')
         os.mkdir(tmp_subdir)
-        _, tmp_file3 = tempfile.mkstemp(dir=tmp_subdir)
+        _, tmp_file3 = tempfile.mkstemp(dir=tmp_subdir, suffix=".md")
 
         files = file_utils.get_files(self.tmp_dir, relative_paths=False, include_directories=True)
         self.assertEqual(len(files), 4)
@@ -154,6 +138,9 @@ class FileUtilsTests(unittest.TestCase):
         self.assertTrue(any(self.paths_equal(tmp_file2, d) for d in files))
         self.assertTrue(any(self.paths_equal(tmp_subdir, d) for d in files))
         self.assertTrue(any(self.paths_equal(tmp_file3, d) for d in files))
+
+        files = file_utils.get_files(self.tmp_dir, extensions=['.md'])
+        self.assertEqual(len(files), 1)
 
         files = file_utils.get_files(self.tmp_dir, relative_paths=True, include_directories=True)
         self.assertEqual(len(files), 4)
@@ -170,9 +157,9 @@ class FileUtilsTests(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         _, tmp_file1 = tempfile.mkstemp(dir=self.tmp_dir)
         _, tmp_file2 = tempfile.mkstemp(dir=self.tmp_dir)
-        tmp_subdir = self.tmp_dir + "/subdir"
+        tmp_subdir = os.path.join(self.tmp_dir, 'subdir')
         os.mkdir(tmp_subdir)
-        tmp_subsubdir = tmp_subdir + "/subdir"
+        tmp_subsubdir = os.path.join(tmp_subdir, 'subdir')
         os.mkdir(tmp_subsubdir)
 
         subdirs = file_utils.get_subdirs(self.tmp_dir, relative_paths=False)

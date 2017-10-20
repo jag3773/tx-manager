@@ -1,408 +1,440 @@
 from __future__ import absolute_import, unicode_literals, print_function
-import itertools
+import json
 import unittest
 import mock
-import responses
-from six import StringIO
+from bs4 import BeautifulSoup
 from tests.manager_tests import mock_utils
-from manager.job import TxJob
-from manager.manager import TxManager
-from manager.module import TxModule
+from moto import mock_dynamodb2
+from datetime import datetime
+from libraries.models.job import TxJob
+from libraries.manager.manager import TxManager
+from libraries.models.module import TxModule
+from libraries.app.app import App
 
 
+@mock_dynamodb2
 class ManagerTest(unittest.TestCase):
-    MOCK_API_URL = "https://api.example.com"
-    MOCK_CALLBACK_URL = "https://callback.example.com/"
-    MOCK_GOGS_URL = "https://mock.gogs.io"
+    MOCK_CALLBACK_URL = 'http://example.com/client/callback'
 
-    mock_job_db = None
-    mock_module_db = None
-    mock_db = None
+    requested_urls = []
     mock_gogs = None
-    mock_lambda = None
-
-    patches = []
 
     @classmethod
     def setUpClass(cls):
-        """
-        Create mock AWS handlers, and apply corresponding monkey patches
-        """
-        cls.mock_job_db = mock_utils.mock_db_handler(data={
-            0: {
-                "job_id": 0,
-                "status": "started",
-                "resource_type": "obs",
-                "input_format": "markdown",
-                "output_format": "html"
-            },
-            1: {
-                "job_id": 1,
-                "status": "requested",
-                "resource_type": "obs",
-                "input_format": "markdown",
-                "output_format": "html"
-            },
-            2: {
-                "job_id": 2,
-                "status": "requested",
-                "resource_type": "ulb",
-                "input_format": "usfm",
-                "output_format": "html",
-                "callback": ManagerTest.MOCK_CALLBACK_URL,
-            },
-            3: {
-                "job_id": 3,
-                "status": "requested",
-                "resource_type": "other",
-                "input_format": "markdown",
-                "output_format": "html"
-            },
-            4: {
-                "job_id": 4,
-                "status": "requested",
-                "resource_type": "unsupported",
-                "input_format": "markdown",
-                "output_format": "html"
-            }
-        }, keyname="job_id")
-        cls.mock_module_db = mock_utils.mock_db_handler(data={
-            "module1": {
-                "name": "module1",
-                "resource_types": ["obs", "ulb"],
-                "input_format": "markdown",
-                "output_format": "html"
-            },
-            "module2": {
-                "name": "module2",
-                "resource_types": ["ulb"],
-                "input_format": "usfm",
-                "output_format": "html"
-            },
-            "module3": {
-                "name": "module3",
-                "resource_types": ["other", "yet_another"],
-                "input_format": "markdown",
-                "output_format": "html"
-            }
-        }, keyname="name")
-
-        cls.mock_db = mock.MagicMock(
-            side_effect=itertools.cycle([cls.mock_job_db, cls.mock_module_db]))
-        cls.mock_gogs = mock.MagicMock(
-            return_value=mock_utils.mock_gogs_handler(["token1", "token2"]))
-        cls.mock_lambda = mock.MagicMock(
-            return_value=mock_utils.mock_lambda_handler(["module2"], ["module1"]))
-
+        cls.mock_gogs = mock_utils.mock_gogs_handler(['token1', 'token2'])
         ManagerTest.patches = (
-            mock.patch("manager.manager.DynamoDBHandler", cls.mock_db),
-            mock.patch("manager.manager.GogsHandler", cls.mock_gogs),
-            mock.patch("manager.manager.LambdaHandler", cls.mock_lambda)
+            mock.patch('libraries.app.app.GogsHandler', cls.mock_gogs),
         )
-
         for patch in ManagerTest.patches:
             patch.start()
-
-    def setUp(self):
-        ManagerTest.mock_job_db.reset_mock()
-        ManagerTest.mock_module_db.reset_mock()
-        ManagerTest.mock_db.reset_mock()
-        ManagerTest.mock_gogs.reset_mock()
-        ManagerTest.mock_lambda.reset_mock()
 
     @classmethod
     def tearDownClass(cls):
         for patch in ManagerTest.patches:
             patch.stop()
 
-    def test_setup_job(self):
-        """
-        Successful call of setup_job
-        """
-        tx_manager = TxManager(gogs_url=self.MOCK_GOGS_URL)
-        data = {
-            "gogs_user_token": "token1",
-            "cdn_bucket":  "test_cdn_bucket",
-            "source": "test_source",
-            "resource_type": "obs",
-            "input_format": "markdown",
-            "output_format": "html"
+    def setUp(self):
+        """Runs before each test."""
+        App(prefix='{0}-'.format(self._testMethodName), db_connection_string='sqlite:///:memory:')
+        App._gogs_handler = ManagerTest.mock_gogs
+        ManagerTest.mock_gogs.reset_mock()
+        ManagerTest.requested_urls = []
+        self.tx_manager = TxManager()
+        self.job_items = {}
+        self.module_items = {}
+        self.init_items()
+        self.populate_tables()
+
+    def tearDown(self):
+        """Runs after each test."""
+        App.db_close()
+
+    def init_items(self):
+        self.job_items = {
+            'job1': {
+                'job_id': 'job1',
+                'status': 'requested',
+                'resource_type': 'obs',
+                'input_format': 'md',
+                'output_format': 'html',
+                'convert_module': 'module1',
+                'errors': [],
+                'identifier': 'dummy-repo/dummy-user/dummy-commit',
+                'cdn_bucket': 'cdn.door43.org',
+                'source': 'https://door43.org/dummy_source',
+                'output': 'https://door43.org/dummy_output',
+                'manifests_id': 1
+            },
+            'job2': {
+                'job_id': 'job2',
+                'status': 'requested',
+                'resource_type': 'obs',
+                'input_format': 'md',
+                'output_format': 'html',
+                'convert_module': 'module1',
+                'cdn_bucket': 'cdn.door43.org',
+                'identifier': 'tx-manager-test-data/en-ulb-jud/6778aa89bd',
+                'output': 'https://test-cdn.door43.org/tx-manager-test-data/en-ulb-jud/6778aa89bd.zip',
+                'source': 'https://s3-us-west-2.amazonaws.com/tx-webhook-client/preconvert/e8eb91750d.zip',
+                'manifests_id': 2
+            },
+            'job3': {
+                'job_id': 'job3',
+                'status': 'requested',
+                'resource_type': 'ulb',
+                'input_format': 'usfm',
+                'output_format': 'html',
+                'callback': ManagerTest.MOCK_CALLBACK_URL,
+                'convert_module': 'module1',
+                'identifier': 'dummy-repo/dummy-user/dummy-commit',
+                'cdn_bucket': 'cdn.door43.org',
+                'source': 'https://door43.org/dummy_source',
+                'output': 'https://door43.org/dummy_output',
+                'warnings': [],
+                'manifests_id': 3
+            },
+            'job4': {
+                'job_id': 'job4',
+                'status': 'requested',
+                'resource_type': 'other',
+                'input_format': 'md',
+                'output_format': 'html',
+                'convert_module': 'module1',
+                'identifier': 'dummy-repo/dummy-user/dummy-commit',
+                'cdn_bucket': 'cdn.door43.org',
+                'source': 'https://door43.org/dummy_source',
+                'output': 'https://door43.org/dummy_output',
+                'manifests_id': 4
+            },
+            'job5': {
+                'job_id': 'job5',
+                'status': 'requested',
+                'resource_type': 'unsupported',
+                'input_format': 'md',
+                'output_format': 'html',
+                'convert_module': 'module1',
+                'identifier': 'dummy-repo/dummy-user/dummy-commit',
+                'cdn_bucket': 'cdn.door43.org',
+                'source': 'https://door43.org/dummy_source',
+                'output': 'https://door43.org/dummy_output',
+                'manifests_id': 5
+            },
+            'job7': {
+                'job_id': 'job7',
+                'status': 'requested',
+                'resource_type': 'obs',
+                'input_format': 'md',
+                'output_format': 'html',
+                'convert_module': 'module2',
+                'identifier': 'dummy-repo/dummy-user/dummy-commit',
+                'cdn_bucket': 'cdn.door43.org',
+                'source': 'https://door43.org/dummy_source',
+                'output': 'https://door43.org/dummy_output',
+                'manifests_id': 7
+            },
+            'job8': {
+                'job_id': 'job8',
+                'status': 'success',
+                'resource_type': 'obs',
+                'input_format': 'md',
+                'output_format': 'html',
+                'convert_module': 'module2',
+                'identifier': 'dummy-repo/dummy-user/dummy-commit',
+                'cdn_bucket': 'cdn.door43.org',
+                'source': 'https://door43.org/dummy_source',
+                'output': 'https://door43.org/dummy_output',
+                'manifests_id': 8
+            },
+            'job9': {
+                'job_id': 'job9',
+                'status': 'requested',
+                'resource_type': 'obs',
+                'input_format': 'html',
+                'output_format': 'pdf',
+                'convert_module': 'module4',
+                'identifier': 'dummy-repo/dummy-user/dummy-commit',
+                'cdn_bucket': 'cdn.door43.org',
+                'source': 'https://door43.org/dummy_source',
+                'output': 'https://door43.org/dummy_output',
+                'manifests_id': 9
+            },
+            'job10': {
+                'job_id': 'job10',
+                'status': 'failed',
+                'resource_type': 'obs',
+                'input_format': 'md',
+                'output_format': 'html',
+                'convert_module': 'module2',
+                'identifier': 'tx-manager-test-data/en-ulb-jud/6778aa89bZ',
+                'output': 'https://test-cdn.door43.org/tx-manager-test-data/en-ulb-jud/6778aa89bdZ.zip',
+                'source': 'https://s3-us-west-2.amazonaws.com/tx-webhook-client/preconvert/e8eb91750dZ.zip',
+                'errors': ['error1', 'error2'],
+                'cdn_bucket': 'cdn.door43.org',
+                'manifests_id': 10
+            },
+            'job11': {
+                'job_id': 'job11',
+                'status': 'warnings',
+                'resource_type': 'obs',
+                'input_format': 'md',
+                'output_format': 'html',
+                'convert_module': 'module2',
+                'identifier': 'tx-manager-test-data/en-ulb-jud/6778aa89bZZ',
+                'output': 'https://test-cdn.door43.org/tx-manager-test-data/en-ulb-jud/6778aa89bdZZ.zip',
+                'source': 'https://s3-us-west-2.amazonaws.com/tx-webhook-client/preconvert/e8eb91750dZZ.zip',
+                'errors': ['error1', 'error2', 'error3'],
+                'cdn_bucket': 'cdn.door43.org',
+                'manifests_id': 11
+            }
         }
-        tx_manager.setup_job(data)
-        # assert an entry was aded to job database
-        args, kwargs = self.call_args(ManagerTest.mock_job_db.insert_item, num_args=1)
-        arg = args[0]
-        self.assertIsInstance(arg, dict)
-        self.assertEqual(arg["convert_module"], "module1")
-        self.assertEqual(arg["resource_type"], "obs")
-        self.assertEqual(arg["cdn_bucket"], "test_cdn_bucket")
-
-    def test_setup_job_malformed_input(self):
-        """
-        Call setup_job with malformed data arguments
-        """
-        tx_manager = TxManager()
-        data = {
-            "gogs_user_token": "token1",
-            "cdn_bucket": "test_cdn_bucket",
-            "source": "test_source",
-            "resource_type": "obs",
-            "input_format": "markdown",
-            "output_format": "html"
+        self.module_items = {
+            'module1': {
+                'name': 'module1',
+                'type': 'conversion',
+                'version': '1',
+                'resource_types': ['obs', 'ulb'],
+                'input_format': ['md'],
+                'output_format': ['html'],
+                'public_links': ['{0}/tx/convert/md2html'.format(App.api_url)],
+                'private_links': ['{0}/tx/private/module1'.format(App.api_url)],
+                'options': {'pageSize': 'A4'}
+            },
+            'module2': {
+                'name': 'module2',
+                'type': 'conversion',
+                'version': '1',
+                'resource_types': ['ulb'],
+                'input_format': ['usfm'],
+                'output_format': ['html'],
+                'public_links': ['{0}/tx/convert/usfm2html'.format(App.api_url)],
+                'private_links': [],
+                'options': {'pageSize': 'A4'}
+            },
+            'module3': {
+                'name': 'module3',
+                'type': 'conversion',
+                'version': '1',
+                'resource_types': ['other', 'yet_another'],
+                'input_format': ['md'],
+                'output_format': ['html'],
+                'public_links': [],
+                'private_links': [],
+                'options': {}
+            }
         }
-        for key in data:
-            # should raise an exception if data is missing a required field
-            missing = data.copy()
-            del missing[key]
-            self.assertRaises(Exception, tx_manager.setup_job, missing)
-        # should raise an exception if called with an invalid user_token
-        bad_token = data.copy()
-        bad_token["gogs_user_token"] = "bad_token"
-        self.assertRaises(Exception, tx_manager.setup_job, bad_token)
 
-    def test_setup_job_no_converter(self):
-        """
-        Call setup_job when there is no applicable converter.
-        """
+    def populate_tables(self):
+        for idx in self.job_items:
+            tx_job = TxJob(**self.job_items[idx])
+            tx_job.insert()
+
+        for idx in self.module_items:
+            tx_module = TxModule(**self.module_items[idx])
+            tx_module.insert()
+
+    def test_list_jobs(self):
+        """Test list_jobs and list_endpoint methods."""
         tx_manager = TxManager()
-        data = {
-            "gogs_user_token": "token1",
-            "cdn_bucket": "test_cdn_bucket",
-            "source": "test_source",
-            "resource_type": "unrecognized_resource_type",
-            "input_format": "markdown",
-            "output_format": "html"
-        }
-        self.assertRaises(Exception, tx_manager.setup_job, data)
+        jobs = tx_manager.list_jobs({'gogs_user_token': 'token2'}, True)
+        self.assertEqual(jobs.count(), len(self.job_items))
 
-    def test_start_job1(self):
-        """
-        Call start job in job 1 from mock data. Should be a successful
-        invocation with warnings.
-        """
-        tx_manager = TxManager()
-        tx_manager.start_job(1)
-        # assert that correct lambda function was invoked
-        args, kwargs = self.call_args(ManagerTest.mock_lambda().invoke, num_args=2)
-        module_name = args[0]
-        self.assertEqual(module_name, "module1")
-        payload = args[1]
-        self.assertIsInstance(payload, dict)
-        self.assertIn("data", payload)
-        self.assertIn("job", payload["data"])
-
-        # job1's entry in database should have been updated
-        args, kwargs = self.call_args(ManagerTest.mock_job_db.update_item, num_args=2)
-        keys = args[0]
-        self.assertIsInstance(keys, dict)
-        self.assertIn("job_id", keys)
-        self.assertEqual(keys["job_id"], 1)
-        data = args[1]
-        self.assertIsInstance(data, dict)
-        self.assertIn("errors", data)
-        self.assertEqual(len(data["errors"]), 0)
-        self.assertIn("warnings", data)
-        self.assertTrue(len(data["warnings"]) > 0)
-
-    @responses.activate
-    def test_start_job2(self):
-        """
-        Call start_job in job 2 from mock data. Should be a successful
-        invocation without warnings.
-        """
-        # mock out job 2's callback
-        responses.add(responses.POST, ManagerTest.MOCK_CALLBACK_URL)
-        tx_manager = TxManager()
-        tx_manager.start_job(2)
-        self.assertEqual(len(responses.calls), 1)
-        self.assertEqual(responses.calls[0].request.url, ManagerTest.MOCK_CALLBACK_URL)
-        # assert that correct lambda function was invoked
-        args, kwargs = self.call_args(ManagerTest.mock_lambda().invoke, num_args=2)
-        module_name = args[0]
-        self.assertEqual(module_name, "module2")
-        payload = args[1]
-        self.assertIsInstance(payload, dict)
-        self.assertIn("data", payload)
-        self.assertIn("job", payload["data"])
-
-        # job2's entry in database should have been updated
-        ManagerTest.mock_job_db.update_item.assert_called()
-        args, kwargs = self.call_args(ManagerTest.mock_job_db.update_item, num_args=2)
-        keys = args[0]
-        self.assertIsInstance(keys, dict)
-        self.assertIn("job_id", keys)
-        self.assertEqual(keys["job_id"], 2)
-        data = args[1]
-        self.assertIsInstance(data, dict)
-        self.assertIn("errors", data)
-        self.assertEqual(len(data["errors"]), 0)
-
-    def test_start_job3(self):
-        """
-        Call start_job on job 3 from mock data. Invocation should result in an error
-        """
-        manager = TxManager()
-        manager.start_job(3)
-        ManagerTest.mock_lambda().invoke.assert_called()
-        # assert that correct lambda function was invoked
-        args, kwargs = self.call_args(ManagerTest.mock_lambda().invoke, num_args=2)
-        module_name = args[0]
-        self.assertEqual(module_name, "module3")
-        payload = args[1]
-        self.assertIsInstance(payload, dict)
-        self.assertIn("data", payload)
-        self.assertIn("job", payload["data"])
-
-        # job3's entry in database should have been updated
-        ManagerTest.mock_job_db.update_item.assert_called()
-        args, kwargs = self.call_args(ManagerTest.mock_job_db.update_item, num_args=2)
-        keys = args[0]
-        self.assertIn("job_id", keys)
-        self.assertEqual(keys["job_id"], 3)
-        self.assertIsInstance(keys, dict)
-        data = args[1]
-        self.assertIsInstance(data, dict)
-        self.assertIn("errors", data)
-        self.assertTrue(len(data["errors"]) > 0)
-
-    def test_start_job_failure(self):
-        """
-        Call start_job with non-runnable/non-existent jobs
-        """
-        tx_manager = TxManager()
-        tx_manager.start_job(0)
-        tx_manager.start_job(4)
-        tx_manager.start_job(5)
-
-        # no lambda function should have been invoked
-        ManagerTest.mock_lambda().invoke.assert_not_called()
-
-        # last existent job (4) should be updated in database to include error
-        # messages
-        args, kwargs = self.call_args(ManagerTest.mock_job_db.update_item, num_args=2)
-        keys = args[0]
-        self.assertIsInstance(keys, dict)
-        self.assertIn("job_id", keys)
-        self.assertEqual(keys["job_id"], 4)
-        data = args[1]
-        self.assertIsInstance(data, dict)
-        self.assertIn("job_id", data)
-        self.assertEqual(data["job_id"], 4)
-        self.assertIn("errors", data)
-        self.assertTrue(len(data["errors"]) > 0)
-
-    def test_list(self):
-        """
-        Test list_jobs and list_endpoint methods
-        """
-        tx_manager = TxManager(api_url=self.MOCK_API_URL, gogs_url=self.MOCK_GOGS_URL)
-        jobs = tx_manager.list_jobs({"gogs_user_token": "token2"}, True)
-        expected = [TxJob(job).get_db_data()
-                    for job in ManagerTest.mock_job_db.mock_data.values()]
-        self.assertEqual(jobs, expected)
-
-        self.assertRaises(Exception, tx_manager.list_jobs, {"bad_key": "token1"})
-        self.assertRaises(Exception, tx_manager.list_jobs, {"gogs_user_token": "bad_token"})
+        self.assertRaises(Exception, tx_manager.list_jobs, {'bad_key': 'token1'})
+        self.assertRaises(Exception, tx_manager.list_jobs, {'gogs_user_token': 'bad_token'})
 
         endpoints = tx_manager.list_endpoints()
         self.assertIsInstance(endpoints, dict)
-        self.assertIn("version", endpoints)
-        self.assertEqual(endpoints["version"], "1")
-        self.assertIn("links", endpoints)
-        self.assertIsInstance(endpoints["links"], list)
-        for link_data in endpoints["links"]:
+        self.assertIn('version', endpoints)
+        self.assertEqual(endpoints['version'], '1')
+        self.assertIn('links', endpoints)
+        self.assertIsInstance(endpoints['links'], list)
+        for link_data in endpoints['links']:
             self.assertIsInstance(link_data, dict)
-            self.assertIn("href", link_data)
-            self.assertEqual(self.MOCK_API_URL + "/tx/job", link_data["href"])
-            self.assertIn("rel", link_data)
-            self.assertIsInstance(link_data["rel"], unicode)
-            self.assertIn("method", link_data)
-            self.assertIn(link_data["method"],
-                          ["GET", "POST", "PUT", "PATCH", "DELETE"])
+            self.assertIn('href', link_data)
+            self.assertEqual(App.api_url + '/tx/job', link_data['href'])
+            self.assertIn('rel', link_data)
+            self.assertIsInstance(link_data['rel'], unicode)
+            self.assertIn('method', link_data)
+            self.assertIn(link_data['method'],
+                          ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 
     def test_register_module(self):
-        manager = TxManager()
-
         data = {
-            "name": "module1",
-            "type": "conversion",
-            "resource_types": ["obs"],
-            "input_format": "markdown",
-            "output_format": "html"
+            'name': 'module4',
+            'type': 'conversion',
+            'resource_types': ['obs'],
+            'input_format': 'md',
+            'output_format': 'html',
+            'options': {'pageSize': 'A4'},
+            'public_links': [],
+            'private_links': []
         }
-        manager.register_module(data)
-        ManagerTest.mock_module_db.insert_item.assert_called()
-        args, kwargs = self.call_args(ManagerTest.mock_module_db.insert_item, num_args=1)
-        self.assertEqual(args[0], TxModule(data).get_db_data())
+        self.tx_manager.register_module(data)
+        tx_module = TxModule.get(name=data['name'])
+        self.assertIsNotNone(tx_module)
+        self.assertEqual(tx_module.options['pageSize'], 'A4')
+        self.assertEqual(tx_module.created_at.year, datetime.utcnow().year)
+        self.assertEqual(tx_module.updated_at.year, datetime.utcnow().year)
+        self.assertEqual(tx_module.public_links, ['{0}/tx/convert/{1}'.format(App.api_url, data['name'])])
 
-        for key in data:
-            # should raise an expection if data is missing a required field
+        test_missing_keys = ['name', 'type', 'input_format', 'resource_types']
+        for key in test_missing_keys:
+            # should raise an exception if data is missing a required field
             missing = data.copy()
             del missing[key]
-            self.assertRaises(Exception, manager.register_module, missing)
+            self.assertRaises(Exception, self.tx_manager.register_module, missing)
 
-    def test_debug_print(self):
-        for quiet in (True, False):
-            manager = TxManager(quiet=quiet)
-            mock_stdout = StringIO()
-            with mock.patch("sys.stdout", mock_stdout):
-                manager.debug_print("Hello world")
-                if quiet:
-                    self.assertEqual(mock_stdout.getvalue(), "")
-                else:
-                    self.assertEqual(mock_stdout.getvalue(), "Hello world\n")
+    def test_generate_dashboard(self):
+        self.tx_manager.build_language_popularity_tables = self.mock_build_language_popularity_tables
+        dashboard = self.tx_manager.generate_dashboard()
+        # the title should be tX-Manager Dashboard
+        self.assertEqual(dashboard['title'], 'tX-Manager Dashboard')
+        self.assertFalse('html.parser' in dashboard['body'])
+        soup = BeautifulSoup(dashboard['body'], 'html.parser')
+        # there should be a status table tag
+        status_table = soup.find('table', id='status')
 
-    def test_get_update_delete_job(self):
-        """
-        Test [get/update/delete]_job methods
-        """
-        manager = TxManager()
+        module_name = 'module1'
+        expected_row_count = 12
+        expected_success_count = 0
+        expected_warning_count = 0
+        expected_failure_count = 5
+        self.validateModule(status_table, module_name, expected_row_count, expected_success_count, 
+                            expected_failure_count, expected_warning_count)
 
-        # get_job
-        job = manager.get_job(0)
-        self.assertIsInstance(job, TxJob)
-        self.assertEqual(job.job_id, 0)
-        self.assertEqual(job.status, "started")
+        module_name = 'module2'
+        expected_row_count = 11
+        expected_success_count = 1
+        expected_warning_count = 1
+        expected_failure_count = 2
+        self.validateModule(status_table, module_name, expected_row_count, expected_success_count,
+                            expected_failure_count, expected_warning_count)
 
-        # update_job
-        manager.update_job(job)
-        args, kwargs = self.call_args(ManagerTest.mock_job_db.update_item,
-                                      num_args=2)
-        self.assertEqual(args[0], {"job_id": 0})
-        self.assertEqual(args[1], job.get_db_data())
+        module_name = 'module3'
+        expected_row_count = 9
+        expected_success_count = 0
+        expected_warning_count = 0
+        expected_failure_count = 0
+        self.validateModule(status_table, module_name, expected_row_count, expected_success_count, 
+                            expected_failure_count, expected_warning_count)
 
-        # delete_job
-        manager.delete_job(job)
-        args, kwargs = self.call_args(ManagerTest.mock_job_db.delete_item,
-                                      num_args=1)
-        self.assertEqual(args[0], {"job_id": 0})
+        module_name = 'module4'
+        expected_row_count = 0
+        expected_success_count = 0
+        expected_warning_count = 0
+        expected_failure_count = 0
+        self.validateModule(status_table, module_name, expected_row_count, expected_success_count, 
+                            expected_failure_count, expected_warning_count)
 
-    def test_get_update_delete_module(self):
-        """
-        Test [get/update/delete]_module methods
-        """
-        manager = TxManager()
+        module_name = 'totals'
+        expected_row_count = 5
+        expected_success_count = 1
+        expected_warning_count = 1
+        expected_failure_count = 8
+        expected_unregistered = 0
+        self.validateModule(status_table, module_name, expected_row_count, expected_success_count, 
+                            expected_failure_count, expected_warning_count, expected_unregistered)
 
-        # get_module
-        module = manager.get_module("module1")
-        self.assertIsInstance(module, TxModule)
-        self.assertEqual(module.name, "module1")
-        self.assertEqual(module.input_format, "markdown")
+        failure_table = soup.find('table', id='failed')
+        expected_failure_count = 8
+        self.validateFailureTable(failure_table, expected_failure_count)
 
-        # update_module
-        manager.update_module(module)
-        args, kwargs = self.call_args(ManagerTest.mock_module_db.update_item,
-                                      num_args=2)
-        self.assertEqual(args[0], {"name": "module1"})
-        self.assertEqual(args[1], module.get_db_data())
+    def test_generate_dashboard_max_two(self):
+        expected_max_failures = 2
+        self.tx_manager.build_language_popularity_tables = self.mock_build_language_popularity_tables
+        dashboard = self.tx_manager.generate_dashboard(expected_max_failures)
 
-        # delete_module
-        manager.delete_module(module)
-        args, kwargs = self.call_args(ManagerTest.mock_module_db.delete_item,
-                                      num_args=1)
-        self.assertEqual(args[0], {"name": "module1"})
+        # the title should be tX-Manager Dashboard
+        self.assertEqual(dashboard['title'], 'tX-Manager Dashboard')
+        soup = BeautifulSoup(dashboard['body'], 'html.parser')
+        # there should be a status table tag
+        status_table = soup.find('table', id='status')
+
+        module_name = 'module1'
+        expected_row_count = 12
+        expected_success_count = 0
+        expected_warning_count = 0
+        expected_failure_count = 5
+        self.validateModule(status_table, module_name, expected_row_count, expected_success_count,
+                            expected_failure_count, expected_warning_count)
+
+        module_name = 'module2'
+        expected_row_count = 11
+        expected_success_count = 1
+        expected_warning_count = 1
+        expected_failure_count = 2
+        self.validateModule(status_table, module_name, expected_row_count, expected_success_count, expected_failure_count,
+                            expected_warning_count)
+
+        module_name = 'module3'
+        expected_row_count = 9
+        expected_success_count = 0
+        expected_warning_count = 0
+        expected_failure_count = 0
+        self.validateModule(status_table, module_name, expected_row_count, expected_success_count, expected_failure_count,
+                            expected_warning_count)
+
+        module_name = 'totals'
+        expected_row_count = 5
+        expected_success_count = 1
+        expected_warning_count = 1
+        expected_failure_count = 8
+        expected_unregistered = 0
+        self.validateModule(status_table, module_name, expected_row_count, expected_success_count,
+                            expected_failure_count, expected_warning_count, expected_unregistered)
+
+        failure_table = soup.find('table', id='failed')
+        expected_failure_count = expected_max_failures
+        self.validateFailureTable(failure_table, expected_failure_count)
 
     # helper methods #
+
+    def create_mock_payload(self, payload):
+        mock_payload = ManagerTest.PayloadMock()
+        mock_payload.response = json.dumps(payload)
+        mock_payload = {'Payload': mock_payload}
+        return mock_payload
+
+    def validateFailureTable(self, table, expected_failure_count):
+        self.assertIsNotNone(table)
+        modules = table.findAll('tr', id=lambda x: x and x.startswith('failure-'))
+        row_count = len(modules)
+        self.assertEquals(row_count, expected_failure_count)
+
+    def validateModule(self, table, module_name, expected_row_count, expected_success_count, expected_failure_count,
+                       expected_warning_count, expected_unregistered=0):
+        self.assertIsNotNone(table)
+        modules = table.findAll('tr', id=lambda x: x and x.startswith(module_name + '-'))
+        row_count = len(modules)
+        self.assertEquals(row_count, expected_row_count)
+        if expected_row_count > 0:
+            success_count = self.get_count_from_row(table, module_name + '-job-success')
+            self.assertEquals(success_count, expected_success_count)
+            warning_count = self.get_count_from_row(table, module_name + '-job-warning')
+            self.assertEquals(warning_count, expected_warning_count)
+            failure_count = self.get_count_from_row(table, module_name + '-job-failure')
+            self.assertEquals(failure_count, expected_failure_count)
+            unregistered_count = self.get_count_from_row(table, module_name + '-job-unregistered')
+            self.assertEquals(unregistered_count, expected_unregistered)
+            expected_total_count = expected_failure_count + expected_success_count + expected_warning_count + expected_unregistered
+            total_count = self.get_count_from_row(table, module_name + '-job-total')
+            self.assertEquals(total_count, expected_total_count)
+
+    def get_count_from_row(self, table, rowID):
+        rows = table.findAll('tr', id=lambda x: x == rowID)
+        if len(rows) == 0:
+            return 0
+
+        data_fields = rows[0].findAll('td')
+        strings = data_fields[1].stripped_strings  # get data from second column
+        count = -1
+        for string in strings:
+            count = int(string)
+            break
+
+        return count
+
+    def mock_build_language_popularity_tables(self, body, max_count):
+        pass
 
     def call_args(self, mock_object, num_args, num_kwargs=0):
         """
@@ -417,6 +449,11 @@ class ManagerTest(unittest.TestCase):
         self.assertEqual(len(kwargs), num_kwargs)
         return args, kwargs
 
+    class PayloadMock(mock.Mock):
+        response = None
 
-if __name__ == "__main__":
+        def read(self):
+            return self.response
+
+if __name__ == '__main__':
     unittest.main()

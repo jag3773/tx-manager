@@ -2,7 +2,7 @@ from __future__ import absolute_import, unicode_literals, print_function
 import mock
 import unittest
 
-from gogs_tools.gogs_handler import GogsHandler
+from libraries.gogs_tools.gogs_handler import GogsHandler
 
 
 class GogsHandlerTests(unittest.TestCase):
@@ -12,6 +12,7 @@ class GogsHandlerTests(unittest.TestCase):
         cls.handler.gogs_api = mock.MagicMock()
 
     def setUp(self):
+        """Runs before each test."""
         self.handler.gogs_api.reset_mock()
 
     def test_authenticate_user_token(self):

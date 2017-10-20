@@ -2,17 +2,46 @@ from setuptools import setup
 
 setup(
     name='tx-manager',
-    version='0.2.3',
+    version='0.3.0',
+    package_dir={
+        'client_converter_callback': 'functions/client_converter_callback',
+        'client_linter_callback': 'functions/client_linter_callback',
+        'client_webhook': 'functions/client_webhook',
+        'convert_md2html': 'functions/convert_md2html',
+        'convert_usfm2html': 'functions/convert_usfm2html',
+        'door43_deploy': 'functions/door43_deploy',
+        'list_endpoints': 'functions/list_endpoints',
+        'register_module': 'functions/register_module',
+        'client': 'libraries/client',
+        'converters': 'libraries/converters',
+        'aws_tools': 'libraries/aws_tools',
+        'door43_tools': 'libraries/door43_tools',
+        'general_tools': 'libraries/general_tools',
+        'gogs_tools': 'libraries/gogs_tools',
+        'lambda_handlers': 'libraries/lambda_handlers',
+        'manager': 'libraries/manager',
+        'resource_container': 'libraries/resource_container'
+    },
     packages=[
+        'client_converter_callback',
+        'client_linter_callback',
+        'client_webhook',
+        'convert_md2html',
+        'convert_usfm2html',
+        'door43_deploy',
+        'list_endpoints',
+        'register_module',
         'client',
-        'manager',
         'converters',
         'aws_tools',
         'door43_tools',
         'general_tools',
         'gogs_tools',
-        'lambda_handlers'
+        'lambda_handlers',
+        'manager',
+        'resource_container'
     ],
+    package_data={'converters': ['templates/*.html']},
     author='unfoldingWord',
     author_email='unfoldingword.org',
     description='Unit test setup file.',
@@ -38,10 +67,15 @@ setup(
         'coveralls==1.1',
         'python-json-logger==0.1.5',
         'markdown==2.6.8',
+        'markdown2==2.3.4',
         'future==0.16.0',
         'pyparsing==2.1.10',
-        'usfm-tools==0.0.8',
-        'mock'  # travis reports syntax error in mock setup.cfg if we give version
+        'usfm-tools==0.0.19',
+        'mock',  # travis reports syntax error in mock setup.cfg if we give version
+        'moto==1.0.1',
+        'PyYAML==3.12',
+        'pymysql==0.7.11',
+        'sqlalchemy==1.2.0b2',
     ],
     test_suite='tests'
 )

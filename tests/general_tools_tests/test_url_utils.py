@@ -1,23 +1,21 @@
 from __future__ import absolute_import, unicode_literals, print_function
 import os
 import tempfile
-from six import BytesIO
 import unittest
-from general_tools import url_utils
+import mock
+import json
+from six import BytesIO
+from libraries.general_tools import url_utils
 
 
 class UrlUtilsTests(unittest.TestCase):
 
     def setUp(self):
-        """
-        Runs before each test
-        """
+        """Runs before each test."""
         self.tmp_file = ""
 
     def tearDown(self):
-        """
-        Runs after each test
-        """
+        """Runs after each test."""
         # delete temp files
         if os.path.isfile(self.tmp_file):
             os.remove(self.tmp_file)
@@ -60,3 +58,17 @@ class UrlUtilsTests(unittest.TestCase):
     def test_join_url_parts_multiple(self):
         self.assertEqual(url_utils.join_url_parts("foo/", "bar", "baz/qux/"),
                          "foo/bar/baz/qux/")
+
+    @mock.patch('libraries.general_tools.url_utils._get_url')
+    def test_get_languages(self, mock_get_url):
+        languages = [
+            {'gw': False, 'ld': 'ltr', 'ang': 'Afar', 'lc': 'aa', 'ln': 'Afaraf', 'lr': 'Africa', 'pk': 6},
+            {'gw': True, 'ld': 'ltr', 'ang': 'English', 'lc': 'en', 'ln': 'English',
+             'lr': 'Europe', 'pk': 1747},
+            {'gw': True, 'ld': 'ltr', 'ang': 'Spanish', 'lc': 'es', 'ln': 'espa\xf1ol',
+             'lr': 'Europe', 'pk': 1776},
+            {'gw': True, 'ld': 'ltr', 'ang': 'French', 'lc': 'fr', 'ln': 'fran\xe7ais, langue fran\xe7aise',
+             'lr': 'Europe', 'pk': 1868}
+        ]
+        mock_get_url.return_value = json.dumps(languages)
+        self.assertEqual(len(url_utils.get_languages()), len(languages))

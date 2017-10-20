@@ -1,91 +1,103 @@
+from __future__ import absolute_import, unicode_literals, print_function
+import codecs
 import os
 import tempfile
 import unittest
 import shutil
-
-from door43_tools.templaters import Templater
-from general_tools.file_utils import unzip
+import re
+from bs4 import BeautifulSoup
+from libraries.door43_tools.templaters import do_template, init_template
+from libraries.general_tools.file_utils import unzip, read_file
 
 
 class TestTemplater(unittest.TestCase):
 
     resources_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'resources')
-
+    
     def setUp(self):
-        """
-        Runs before each test
-        """
+        """Runs before each test."""
         self.out_dir = ''
         self.temp_dir = ""
 
     def tearDown(self):
-        """
-        Runs after each test
-        """
+        """Runs after each test."""
         # delete temp files
         if os.path.isdir(self.out_dir):
             shutil.rmtree(self.out_dir, ignore_errors=True)
         if os.path.isdir(self.temp_dir):
             shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def testTemplaterComplete(self):
-        # given
+    def testTemplaterBibleFourBooks(self):
+        test_folder_name = "converted_projects/en-ulb-4-books.zip"
+        expect_success = True
+        test_file_path = self.extractZipFiles(test_folder_name)
+        success = self.doTemplater('bible', test_file_path)
+        self.verifyBibleTemplater(success, expect_success, self.out_dir,
+                                  ['01-GEN.html', '02-EXO.html', '03-LEV.html', '05-DEU.html'])
+
+    def testTemplaterObsComplete(self):
         test_folder_name = "converted_projects/aab_obs_text_obs-complete.zip"
         expect_success = True
         test_file_path = self.extractZipFiles(test_folder_name)
+        success = self.doTemplater('obs', test_file_path)
+        self.verifyObsTemplater(success, expect_success, self.out_dir)
 
-        # when
-        deployer, success = self.doTemplater(test_file_path)
-
-        # then
-        self.verifyTemplater(success, expect_success, deployer.output_dir)
-
+    def testTemplaterTaComplete(self):
+        test_folder_name = "converted_projects/en_ta-complete.zip"
+        expect_success = True
+        test_file_path = self.extractZipFiles(test_folder_name)
+        success = self.doTemplater('ta', test_file_path)
+        self.verifyTaTemplater(success, expect_success, self.out_dir,
+                               ['checking.html', 'intro.html', 'process.html', 'translate.html'])
+        # Verify sidebar nav generated
+        soup = BeautifulSoup(read_file(os.path.join(self.out_dir, 'checking.html')), 'html.parser')
+        self.assertEqual(len(soup.find('nav', {'id': 'right-sidebar-nav'}).findAll('li')), 49)
+        self.assertEqual(len(soup.find('div', {'id': 'content'}).findAll(re.compile(r'h\d+'),
+                                                                         {'class': 'section-header'})), 44)
 
     def testCommitToDoor43Empty(self):
-        # given
-        test_folder_name = "converted_projects/aae_obs_text_obs-empty.zip"
+        test_folder_name = os.path.join('converted_projects', 'aae_obs_text_obs-empty.zip')
         expect_success = True
         missing_chapters = range(1, 51)
         test_file_path = self.extractZipFiles(test_folder_name)
-
-        # when
-        deployer, success = self.doTemplater(test_file_path)
-
-        # then
-        self.verifyTemplater(success, expect_success, deployer.output_dir, missing_chapters)
-
+        success = self.doTemplater('obs', test_file_path)
+        self.verifyObsTemplater(success, expect_success, self.out_dir, missing_chapters)
 
     def testCommitToDoor43MissingFirstFrame(self):
-        # given
         test_folder_name = "converted_projects/aah_obs_text_obs-missing_first_frame.zip"
         expect_success = True
         test_file_path = self.extractZipFiles(test_folder_name)
-
-        # when
-        deployer, success = self.doTemplater(test_file_path)
-
-        # then
-        self.verifyTemplater(success, expect_success, deployer.output_dir)
-
+        success = self.doTemplater('obs', test_file_path)
+        self.verifyObsTemplater(success, expect_success, self.out_dir)
 
     def testCommitToDoor43MissingChapter50(self):
-        # given
-        test_folder_name = "converted_projects/aai_obs_text_obs-missing_chapter_50.zip"
+        test_folder_name = os.path.join('converted_projects', 'aai_obs_text_obs-missing_chapter_50.zip')
         expect_success = True
         missing_chapters = [50]
         test_file_path = self.extractZipFiles(test_folder_name)
+        success = self.doTemplater('obs', test_file_path)
+        self.verifyObsTemplater(success, expect_success, self.out_dir, missing_chapters)
 
-        # when
-        deployer, success = self.doTemplater(test_file_path)
+    def testTemplaterRightToLeft(self):
+        test_folder_name = os.path.join(self.resources_dir, 'converted_projects', 'glk_obs_text_obs-complete.zip')
+        test_file_path = self.extractZipFiles(test_folder_name)
+        success = self.doTemplater('obs', test_file_path)
 
-        # then
-        self.verifyTemplater(success, expect_success, deployer.output_dir, missing_chapters)
+        # check for dir attribute in html tag
+        with codecs.open(os.path.join(self.out_dir, '01.html'), 'r', 'utf-8-sig') as f:
+            soup = BeautifulSoup(f, 'html.parser')
 
+        self.assertIn('dir', soup.html.attrs)
+        self.assertEqual('rtl', soup.html.attrs['dir'])
 
-    # empty
-    # <div class="col-md-3 sidebar" id="left-sidebar" role="complementary"><span><select id="page-nav" onchange="window.location.href=this.value"><option value="all.html">all</option></select><div><h1>Revisions</h1><table id="revisions" width="100%"></table></div></span></div>
-
-    # <div class="col-md-3 sidebar" id="left-sidebar" role="complementary"><span><select id="page-nav" onchange="window.location.href=this.value"><option value="01.html">01</option><option value="02.html">02</option><option value="03.html">03</option><option value="04.html">04</option><option value="05.html">05</option><option value="06.html">06</option><option value="07.html">07</option><option value="08.html">08</option><option value="09.html">09</option><option value="10.html">10</option><option value="11.html">11</option><option value="12.html">12</option><option value="13.html">13</option><option value="14.html">14</option><option value="15.html">15</option><option value="16.html">16</option><option value="17.html">17</option><option value="18.html">18</option><option value="19.html">19</option><option value="20.html">20</option><option value="21.html">21</option><option value="22.html">22</option><option value="23.html">23</option><option value="24.html">24</option><option value="25.html">25</option><option value="26.html">26</option><option value="27.html">27</option><option value="28.html">28</option><option value="29.html">29</option><option value="30.html">30</option><option value="31.html">31</option><option value="32.html">32</option><option value="33.html">33</option><option value="34.html">34</option><option value="35.html">35</option><option value="36.html">36</option><option value="37.html">37</option><option value="38.html">38</option><option value="39.html">39</option><option value="40.html">40</option><option value="41.html">41</option><option value="42.html">42</option><option value="43.html">43</option><option value="44.html">44</option><option value="45.html">45</option><option value="46.html">46</option><option value="47.html">47</option><option value="48.html">48</option><option value="49.html">49</option><option value="all.html">all</option><option value="front.html">front</option><option value="hide.50.html">hide.50</option></select><div><h1>Revisions</h1><table id="revisions" width="100%"></table></div></span></div>
+    def testTemplaterBibleFourBooks(self):
+        test_folder_name = "converted_projects/en-ulb-4-books.zip"
+        expect_success = True
+        alreadyProcessed = True
+        test_file_path = self.extractZipFiles(test_folder_name)
+        success = self.doTemplater('bible', test_file_path, alreadyProcessed)
+        self.verifyBibleTemplater(success, expect_success, self.out_dir,
+                                  ['01-GEN.html', '02-EXO.html', '03-LEV.html', '05-DEU.html'])
 
     def extractZipFiles(self, test_folder_name):
         file_path = os.path.join(self.resources_dir, test_folder_name)
@@ -93,21 +105,25 @@ class TestTemplater(unittest.TestCase):
         unzip(file_path, self.temp_dir)
         return self.temp_dir
 
-    def doTemplater(self, test_folder_name):
-        template_file = os.path.join(self.resources_dir, 'templates/obs.html')
+    def doTemplater(self, resource_type, test_folder_name, alreadyProcessed=False):
+        template_file = os.path.join(self.resources_dir, 'templates', 'project-page.html')
         self.out_dir = tempfile.mkdtemp(prefix='output_')
-        success = True
-        templater = Templater(test_folder_name, self.out_dir, template_file)
-        try:
-            templater.run()
-        except Exception as e:
-            print("Templater threw exception: ")
-            print(e)
-            success = False
+        if not alreadyProcessed:
+            return do_template(resource_type, test_folder_name, self.out_dir, template_file)
 
-        return templater, success
+        # we pre-process to get title and chapter info
+        template_pre = init_template(resource_type, test_folder_name, self.out_dir, template_file)
+        template_pre.run()
 
-    def verifyTemplater(self, success, expect_success, output_folder, missing_chapters = []):
+        # copy pre-processed data and run again
+        template = init_template(resource_type, self.out_dir, self.out_dir, template_file)
+        template.already_converted = template.files
+        template.book_codes = template_pre.book_codes
+        template.chapters = template_pre.chapters
+        template.titles = template_pre.titles
+        return template.run()
+
+    def verifyObsTemplater(self, success, expect_success, output_folder, missing_chapters=[]):
         self.assertIsNotNone(output_folder)
         self.assertEqual(success, expect_success)
 
@@ -125,6 +141,19 @@ class TestTemplater(unittest.TestCase):
             file_name = os.path.join(output_folder, file_to_verify)
             self.assertFalse(os.path.isfile(file_name), 'file present, but should not be: {0}'.format(file_name))
 
+    def verifyBibleTemplater(self, success, expect_success, output_folder, files_to_verify):
+        self.assertIsNotNone(output_folder)
+        self.assertEqual(success, expect_success)
+        for file_to_verify in files_to_verify:
+            file_name = os.path.join(output_folder, file_to_verify)
+            self.assertTrue(os.path.isfile(file_name), 'file not found: {0}'.format(file_name))
+
+    def verifyTaTemplater(self, success, expect_success, output_folder, filesToVerify=[]):
+        self.assertIsNotNone(output_folder)
+        self.assertEqual(success, expect_success)
+        for file_name in filesToVerify:
+            self.assertTrue(os.path.isfile(os.path.join(output_folder, file_name)), 'file not found: {0}'
+                            .format(file_name))
 
 if __name__ == '__main__':
     unittest.main()
